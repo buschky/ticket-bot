@@ -12,11 +12,10 @@ import (
 )
 
 func main() {
-
 	token := os.Getenv("SLACK_TOKEN")
 	fmt.Println("token : " + token)
 
-	api := slack.New(token)
+	api := slack.New(token) 
 	api.SetDebug(true)
 
 	rtm := api.NewRTM()
@@ -25,7 +24,11 @@ func main() {
 	u := os.Getenv("API_USER")
 	p := os.Getenv("API_PASSWD")
 
-	s := NewBasicAuthClient(u, p)
+	apiurl := os.Getenv("API_URL")
+
+	c := NewBasicAuthClient(u, p, apiurl)
+
+	// s := NewBasicAuthClient(u, p)
 
 Loop:
 	for {
@@ -42,7 +45,7 @@ Loop:
 				prefix := fmt.Sprintf("<@%s> ", info.User.ID)
 
 				if ev.User != info.User.ID && strings.HasPrefix(ev.Text, prefix) {
-					s.respond(rtm, ev, prefix)
+					respond(rtm, ev, prefix, &c)
 				}
 
 			case *slack.RTMError:
@@ -60,17 +63,19 @@ Loop:
 }
 
 // Bot Logic.
-func (s *Client) respond(rtm *slack.RTM, msg *slack.MessageEvent, prefix string) {
+func respond(rtm *slack.RTM, msg *slack.MessageEvent, prefix string, c *Client) {
 	var response string
 	text := msg.Text
-	//	fmt.Println("Text: '" + text + "'")
+	//  fmt.Println("Text: '" + text + "'")
 
-	channnel := msg.Channel
-	//	fmt.Println("Channel '" + channnel + "'")
+	channel := msg.Channel
+	//  fmt.Println("Channel '" + channnel + "'")
 
 	text = strings.TrimPrefix(text, prefix)
 	text = strings.TrimSpace(text)
 	text = strings.ToLower(text)
+
+	fmt.Println("-------------->channel: " + channel)
 
 	// Channel IDs for the allowed access
 	acceptedChannels := map[string]bool{
@@ -87,6 +92,12 @@ func (s *Client) respond(rtm *slack.RTM, msg *slack.MessageEvent, prefix string)
 		"how's it going?": true,
 		"how are ya?":     true,
 		"feeling okay?":   true,
+	}
+
+	acceptedDispachting := map[string]bool{
+		"Let's dispatch!": true,
+		"dispatch":        true,
+		"d":               true,
 	}
 
 	// Prefix you can start a Incident request with
@@ -113,12 +124,12 @@ func (s *Client) respond(rtm *slack.RTM, msg *slack.MessageEvent, prefix string)
 			err = true
 		}
 	} else {
-		text = "hey!"
+		//text = "hey!"
 		IncidentId = "0"
 		err = true
 	}
 
-	if !acceptedChannels[channnel] {
+	if !acceptedChannels[channel] {
 		response = "Hi, I can help you with SAP CRM tickets, but I am not allowed to talk to you, sorry! Please contact @Buschky for more information."
 		rtm.SendMessage(rtm.NewOutgoingMessage(response, msg.Channel))
 		return
@@ -128,35 +139,64 @@ func (s *Client) respond(rtm *slack.RTM, msg *slack.MessageEvent, prefix string)
 		response = "What's up buddy!?!?!"
 		rtm.SendMessage(rtm.NewOutgoingMessage(response, msg.Channel))
 	} else if acceptedHowAreYou[text] {
+
 		response = "I don't like your input. Maybe you like to try it again? Use help for more information."
 		rtm.SendMessage(rtm.NewOutgoingMessage(response, msg.Channel))
+	} else if acceptedDispachting[text] {
+		//response = "{	\"label\": \"Post this message on\",\"name\": \"channel_notify\",\"type\": \"select\",\"data_source\": \"conversations\"  }"
+		//rtm.PostMessage("DC3DY481L", response)
+		p := slack.PostMessageParameters{}
+		a := []slack.AttachmentAction{slack.AttachmentAction{Name: "Press", Text: "Users", Type: "select", DataSource: "users"}}
+		attachment := slack.Attachment{
+			//Pretext: "Dispatching Mode",
+			Text:    "Dispatch Ticket to User",
+			Actions: a, //[a]st
+			// Uncomment the following part to send a field too
+			/*
+				Fields: []slack.AttachmentField{
+					slack.AttachmentField{
+						Title: "a",
+						Value: "no",
+					},
+				},
+			*/
+		}
+
+		p.Username = msg.Username
+		p.User = msg.User
+		p.Attachments = []slack.Attachment{attachment}
+
+		rtm.PostMessage(msg.Channel, "Dispatch Ticket "+IncidentId, p)
+
 	} else if acceptTicketRequest[text] && !err {
 		//var i Incident
 		fmt.Println("IncidentID :" + IncidentId)
 
-		i, _ := s.GetIncident(IncidentId)
-		s, _ := s.GetStatus(IncidentId)
+		i, _ := c.GetIncident(IncidentId)
+		s, _ := c.GetStatus(IncidentId)
 
 		//fmt.println("AssignmentGroup " + i.AssignmentGroup)
-		fmt.Println("Titel  " + i.D.Title)
+		fmt.Println("Titel " + i.D.Title)
 
 		//fmt.Println("objid " + .i..ObjectID)
 		//i, _ := client.GetIncident(1)
 		response = "Info for Ticket " + i.D.ObjectID
+		response = response + "\n-> Title " + i.D.Title
+		response = response + "\n-> Status " + s.D.StatusDesc
 		rtm.SendMessage(rtm.NewOutgoingMessage(response, msg.Channel))
-		response = "-> Title " + i.D.Title
+	} else {
+		response = "------------------------ "
 		rtm.SendMessage(rtm.NewOutgoingMessage(response, msg.Channel))
-		response = "-> Status " + s.D.StatusDesc
-		rtm.SendMessage(rtm.NewOutgoingMessage(response, msg.Channel))
-
 	}
+
 }
 
 // Set the Client Structure to handle authentication
-func NewBasicAuthClient(username, password string) *Client {
-	return &Client{
+func NewBasicAuthClient(username, password string, url string) Client {
+	return Client{
 		Username: username,
 		Password: password,
+		APIurl:   url,
 	}
 }
 
@@ -164,6 +204,7 @@ func NewBasicAuthClient(username, password string) *Client {
 type Client struct {
 	Username string
 	Password string
+	APIurl   string
 }
 
 // Autogenerated Structs from JSON File
@@ -225,17 +266,15 @@ type MainIncident struct {
 	} `json:"d"`
 }
 
-func getURLtoAPI(id string, reqtype string) (url string) {
-	var baseURL string
-	baseURL = ""
-	url = fmt.Sprintf(baseURL + "/Incidents('" + id + "')" + reqtype + "?$format=json")
-	//fmt.Println("CALLED URL----->>>>>   " + url)
+func getURLtoAPI(id string, reqtype string, apiurl string) (url string) {
+	url = fmt.Sprintf(apiurl + "/Incidents('" + id + "')" + reqtype + "?$format=json")
+	//fmt.Println("CALLED URL----->>>>> " + url)
 	return url
 }
 
 func (s *Client) GetIncident(id string) (*MainIncident, error) {
 
-	url := getURLtoAPI(id, "")
+	url := getURLtoAPI(id, "", s.APIurl)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -255,7 +294,7 @@ func (s *Client) GetIncident(id string) (*MainIncident, error) {
 
 func (s *Client) GetStatus(id string) (*MainStatus, error) {
 
-	url := getURLtoAPI(id, "/Status")
+	url := getURLtoAPI(id, "/Status", s.APIurl)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -275,18 +314,18 @@ func (s *Client) GetStatus(id string) (*MainStatus, error) {
 
 /*
 func (s *Client) ChangeIncident(incident *MainIncident) error {
-	url := fmt.Sprintf(baseURL+"/%s/todos", s.Username)
-	fmt.Println(url)
-	j, err := json.Marshal(incident)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(j))
-	if err != nil {
-		return err
-	}
-	_, err = s.doRequest(req)
-	return err
+    url := fmt.Sprintf(baseURL+"/%s/todos", s.Username)
+    fmt.Println(url)
+    j, err := json.Marshal(incident)
+    if err != nil {
+        return err
+    }
+    req, err := http.NewRequest("POST", url, bytes.NewBuffer(j))
+    if err != nil {
+        return err
+    }
+    _, err = s.doRequest(req)
+    return err
 }
 */
 
